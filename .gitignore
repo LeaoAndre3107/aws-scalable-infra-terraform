@@ -1,0 +1,20 @@
+# State local — nunca sobe, o state real está no S3
+*.tfstate
+*.tfstate.backup
+
+# Diretório de plugins e módulos baixados pelo terraform init
+**/.terraform/
+
+# Lock de execução
+.terraform.lock.hcl
+
+# Variáveis com valores reais — podem conter dados sensíveis
+*.tfvars
+
+# Credenciais AWS — NUNCA deve subir
+*.pem
+.aws/
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
