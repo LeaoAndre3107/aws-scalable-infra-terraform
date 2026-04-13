@@ -1,5 +1,4 @@
 name: Terraform CI/CD
-#
 
 on:
   push:
@@ -8,6 +7,25 @@ on:
   pull_request:
     branches:
       - master
+  # Gatilho manual — você dispara pela aba Actions quando precisar
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Ação a executar (apply ou destroy)'
+        required: true
+        default: 'apply'
+        type: choice
+        options:
+          - apply
+          - destroy
+      environment:
+        description: 'Ambiente alvo (dev ou prod)'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - prod
 
 env:
   AWS_REGION: us-east-1
@@ -34,6 +52,15 @@ jobs:
         with:
           terraform_version: 1.14.3
 
+      # Define o ambiente dinamicamente — usa input manual ou dev como padrão
+      - name: Definir ambiente
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "TF_WORKING_DIR=environments/${{ github.event.inputs.environment }}" >> $GITHUB_ENV
+          else
+            echo "TF_WORKING_DIR=environments/dev" >> $GITHUB_ENV
+          fi
+
       - name: Terraform Init
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform init
@@ -42,11 +69,22 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform validate
 
-      # ← NOVA ETAPA AQUI
       - name: Criar terraform.tfvars
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
-          cat > terraform.tfvars << EOF
+          if [ "${{ env.TF_WORKING_DIR }}" == "environments/prod" ]; then
+            cat > terraform.tfvars << EOF
+          aws_region          = "us-east-1"
+          vpc_cidr            = "10.1.0.0/16"
+          subnet_cidr         = "10.1.1.0/24"
+          availability_zone   = "us-east-1a"
+          subnet_cidr_2       = "10.1.2.0/24"
+          availability_zone_2 = "us-east-1b"
+          instance_type       = "t3.small"
+          ami_id              = "ami-0c02fb55956c7d316"
+          EOF
+          else
+            cat > terraform.tfvars << EOF
           aws_region          = "us-east-1"
           vpc_cidr            = "10.0.0.0/16"
           subnet_cidr         = "10.0.1.0/24"
@@ -56,14 +94,22 @@ jobs:
           instance_type       = "t3.micro"
           ami_id              = "ami-0c02fb55956c7d316"
           EOF
+          fi
 
       - name: Terraform Plan
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform plan
 
+      # Apply — só roda em push automático na master
       - name: Terraform Apply
         working-directory: ${{ env.TF_WORKING_DIR }}
-        if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+        if: |
+          (github.ref == 'refs/heads/master' && github.event_name == 'push') ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply')
         run: terraform apply -auto-approve
 
-      
+      # Destroy — SOMENTE via disparo manual, nunca automático
+      - name: Terraform Destroy
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'destroy'
+        run: terraform destroy -auto-approve
