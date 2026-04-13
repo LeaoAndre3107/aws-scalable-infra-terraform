@@ -1,0 +1,61 @@
+name: Terraform CI/CD
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+env:
+  AWS_REGION: us-east-1
+  # Qual ambiente o pipeline vai gerenciar
+  TF_WORKING_DIR: environments/dev
+
+jobs:
+  terraform:
+    name: Terraform Plan & Apply
+    runs-on: ubuntu-latest
+
+    steps:
+      # Passo 1 — Baixa o código do repositório
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      # Passo 2 — Configura as credenciais AWS usando os Secrets
+      # Nunca aparecem no código — vêm do repositório de Secrets
+      - name: Configurar credenciais AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Passo 3 — Instala o Terraform na máquina virtual do GitHub
+      - name: Instalar Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.14.3
+
+      # Passo 4 — Inicializa o Terraform (baixa providers, configura backend S3)
+      - name: Terraform Init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform init
+
+      # Passo 5 — Valida a sintaxe do código
+      - name: Terraform Validate
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform validate
+
+      # Passo 6 — Mostra o que vai mudar (roda em push e PR)
+      - name: Terraform Plan
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform plan
+
+      # Passo 7 — Aplica as mudanças APENAS quando fizer push na branch master
+      # Em Pull Requests só roda até o plan — nunca aplica automaticamente
+      - name: Terraform Apply
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+        run: terraform apply -auto-approve
