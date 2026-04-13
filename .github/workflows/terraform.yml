@@ -66,6 +66,4 @@ jobs:
         if: github.ref == 'refs/heads/master' && github.event_name == 'push'
         run: terraform apply -auto-approve
 
-      - name: Force unlock em caso de falha
-        if: failure()
-        run: terraform -chdir=$TF_WORKING_DIR force-unlock -force $LOCK_ID
+      
