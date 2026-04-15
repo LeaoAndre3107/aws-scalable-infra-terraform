@@ -1,7 +1,7 @@
 terraform {
     #State separado do dev -prod tem seu própio estado
     backend "s3" {
-        bucket ="terraform-state-devops-andre"
+        bucket ="terraform-state-devops-andre-2"
         key = "prod/terraform.tfstate"
         region = "us-east-1"
         dynamodb_table = "terraform-lock"
