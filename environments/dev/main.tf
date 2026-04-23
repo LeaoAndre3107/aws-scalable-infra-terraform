@@ -30,11 +30,13 @@ module "vpc" {
 }
 
 module "ec2" {
-  source        = "../../modules/ec2"
-  vpc_id        = module.vpc.vpc_id
-  subnet_id     = module.vpc.subnet_id
-  instance_type = var.instance_type
-  ami_id        = var.ami_id
+  source             = "../../modules/ec2"
+  environment        = "dev"
+  vpc_id             = module.vpc.vpc_id
+  subnet_id          = module.vpc.subnet_id
+  instance_type      = var.instance_type
+  ami_id             = var.ami_id
+  ecr_repository_url = module.ecr.repository_url
 }
 
 module "asg" {
@@ -47,4 +49,13 @@ module "asg" {
 
 output "alb_dns_name" {
   value = module.asg.alb_dns_name
+}
+
+module "ecr" {
+  source      = "../../modules/ecr"
+  environment = "dev"
+}
+
+output "ecr_repository_url" {
+  value = module.ecr.repository_url
 }

@@ -24,3 +24,8 @@ variable "environment" {
   type        = string
   default     = "dev"
 }
+
+variable "ecr_repository_url" {
+  description = "URL do repositório ECR"
+  type        = string
+}
