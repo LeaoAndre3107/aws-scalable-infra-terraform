@@ -100,6 +100,29 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform plan
 
+        # Autentica o Docker no ECR
+      - name: Login no ECR
+        run: |
+          aws ecr get-login-password --region us-east-1 | docker login \
+            --username AWS \
+            --password-stdin 905542450009.dkr.ecr.us-east-1.amazonaws.com
+
+      # Build e push da imagem — só em push na master ou dispatch manual
+      - name: Build e Push Docker
+        if: |
+          (github.ref == 'refs/heads/master' && github.event_name == 'push') ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply')
+        run: |
+          docker build -t 905542450009.dkr.ecr.us-east-1.amazonaws.com/dev-app:latest ./app
+          docker push 905542450009.dkr.ecr.us-east-1.amazonaws.com/dev-app:latest
+
+      - name: Terraform Apply
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        if: |
+          (github.ref == 'refs/heads/master' && github.event_name == 'push') ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply')
+        run: terraform apply -auto-approve
+
       # Apply — só roda em push automático na master
       - name: Terraform Apply
         working-directory: ${{ env.TF_WORKING_DIR }}
