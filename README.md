@@ -1,45 +1,45 @@
-# Projeto Infra com Docker
+# aws-scalable-infra-terraform
 
-Infraestrutura AWS completa provisionada com Terraform, containerizada com Docker e entregue via pipeline CI/CD com GitHub Actions.
-
----
-
-## Visão geral
-
-Este projeto implementa uma arquitetura escalável na AWS com separação de ambientes (dev/prod), state remoto, autoscaling baseado em métricas de CPU, e deploy automatizado de containers Docker via ECR.
-
-O foco principal está em dois pilares: **segurança por padrão** (IAM com least privilege, state criptografado, acesso público bloqueado) e **escalabilidade eficiente** (containers leves via Docker eliminam overhead de instalação, ASG ajusta capacidade automaticamente sem desperdício de recurso).
+Infraestrutura AWS escalável provisionada com Terraform, containerizada com Docker e com pipeline CI/CD via GitHub Actions.
 
 ---
 
 ## Arquitetura
 
 ```
-GitHub Actions
-    ├── terraform plan / apply
-    ├── docker build + push → Amazon ECR
-    │
-    └── AWS VPC (dev: 10.0.0.0/16 | prod: 10.1.0.0/16)
-            │
-            ├── Application Load Balancer (HTTP :80)
-            │       ├── Subnet pública 1 — us-east-1a
-            │       │       └── EC2 (t3.micro) → Docker → Node.js :3000
-            │       └── Subnet pública 2 — us-east-1b
-            │               └── EC2 (t3.micro) → Docker → Node.js :3000
-            │
-            ├── Auto Scaling Group (min 1 / desired 2 / max 4)
-            ├── CloudWatch Alarms (CPU >70% scale out | <30% scale in)
-            └── Internet Gateway + Route Tables
+GitHub Actions (push → master)
+    ├── terraform init / validate / plan / apply
+    └── docker build + push → Amazon ECR
+           │
+           └── AWS VPC (dev: 10.0.0.0/16 | prod: 10.1.0.0/16)
+                   │
+                   ├── Application Load Balancer (HTTP :80)
+                   │       ├── Subnet pública 1 — us-east-1a
+                   │       └── Subnet pública 2 — us-east-1b
+                   │
+                   ├── Auto Scaling Group
+                   │       ├── Launch Template → EC2 (t3.micro) → Docker → Node.js :3000
+                   │       ├── min: 1 / desired: 2 / max: 4
+                   │       └── Health check via ALB
+                   │
+                   ├── CloudWatch Alarms
+                   │       ├── CPU > 70% → scale out (+1 instância)
+                   │       └── CPU < 30% → scale in  (-1 instância)
+                   │
+                   ├── Amazon ECR (repositório por ambiente)
+                   │       └── Lifecycle policy: mantém 5 imagens mais recentes
+                   │
+                   └── Remote State: S3 + DynamoDB (lock)
 ```
 
 ---
 
-## Stack de tecnologias
+## Stack
 
 | Categoria | Tecnologia |
 |---|---|
-| IaC | Terraform 1.14 |
-| Cloud | AWS (VPC, EC2, ALB, ASG, ECR, S3, DynamoDB, IAM, CloudWatch) |
+| IaC | Terraform ~> 6.0 (provider AWS) |
+| Cloud | AWS — VPC, EC2, ALB, ASG, ECR, S3, DynamoDB, IAM, CloudWatch |
 | Containerização | Docker + Amazon ECR |
 | CI/CD | GitHub Actions |
 | Aplicação | Node.js 18 (Alpine) |
@@ -47,7 +47,7 @@ GitHub Actions
 
 ---
 
-## Estrutura do projeto
+## Estrutura
 
 ```
 aws-scalable-infra-terraform/
@@ -56,85 +56,70 @@ aws-scalable-infra-terraform/
 │       └── terraform.yml       # Pipeline CI/CD
 ├── app/
 │   ├── app.js                  # Aplicação Node.js
-│   ├── Dockerfile              # Imagem Docker
+│   ├── Dockerfile              # Imagem Docker (node:18-alpine)
 │   └── .dockerignore
 ├── modules/
-│   ├── vpc/                    # VPC, subnets, IGW, route tables
-│   ├── ec2/                    # Security group, IAM role, Launch Template
-│   ├── asg/                    # ALB, Target Group, ASG, CloudWatch
-│   └── ecr/                    # Repositório de imagens + lifecycle policy
+│   ├── vpc/                    # VPC, 2 subnets públicas, IGW, route tables
+│   ├── ec2/                    # Security group, IAM role, Launch Template, user_data
+│   ├── asg/                    # ALB, Target Group, Listener, ASG, CloudWatch alarms
+│   └── ecr/                    # Repositório ECR + lifecycle policy
 └── environments/
-    ├── dev/                    # Ambiente de desenvolvimento
-    │   ├── main.tf
-    │   ├── variables.tf
-    │   └── backend.tf (S3 key: dev/terraform.tfstate)
-    └── prod/                   # Ambiente de produção
-        ├── main.tf
-        ├── variables.tf
-        └── backend.tf (S3 key: prod/terraform.tfstate)
+    ├── dev/                    # main.tf + variables.tf (state: s3/dev/terraform.tfstate)
+    └── prod/                   # main.tf + variables.tf (state: s3/prod/terraform.tfstate)
 ```
 
 ---
 
-## Destaques técnicos
+## Decisões de design
 
-**Segurança**
-- IAM Role com `AmazonEC2ContainerRegistryReadOnly` — instâncias EC2 acessam o ECR sem credenciais estáticas
-- Bucket S3 com criptografia AES-256, versionamento e bloqueio de acesso público
-- Security Groups com regras mínimas (princípio do least privilege)
-- Credenciais AWS nunca no código — armazenadas como Secrets no GitHub
+**Módulos reutilizáveis entre ambientes**
+Dev e prod compartilham os mesmos módulos (`vpc`, `ec2`, `asg`, `ecr`). O comportamento muda via variáveis — `instance_type`, `vpc_cidr`, `environment`. Nenhum código duplicado.
 
-**Eficiência de recursos**
-- Imagem Docker baseada em `node:18-alpine` (~50MB vs ~900MB da imagem completa)
-- Lifecycle policy no ECR mantém apenas as 5 últimas imagens
-- ASG escala automaticamente com base em CPU real, sem capacidade ociosa fixa
-- `terraform destroy` disponível via pipeline manual — infraestrutura sobe e desce sob demanda
+**State remoto isolado por ambiente**
+Cada ambiente tem sua própria chave no S3 (`dev/terraform.tfstate`, `prod/terraform.tfstate`). Um `terraform apply` em dev não afeta o state do prod. Lock via DynamoDB previne apply concorrente.
 
-**Multi-ambiente**
-- Módulos compartilhados entre dev e prod — zero duplicação de código
-- States completamente isolados no S3 (`dev/` e `prod/` keys separadas)
-- CIDRs diferentes por ambiente (dev: `10.0.x.x` | prod: `10.1.x.x`)
-- Nomes de recursos com prefixo de ambiente (`dev-app-alb`, `prod-app-alb`)
+**IAM sem credenciais estáticas nas instâncias**
+EC2 assume uma IAM Role com `AmazonEC2ContainerRegistryReadOnly`. O `user_data` autentica no ECR via `aws ecr get-login-password`, que gera token temporário — sem `AWS_ACCESS_KEY_ID` ou `AWS_SECRET_ACCESS_KEY` no código.
 
-**CI/CD**
-- Push na `master` dispara `terraform plan` + `terraform apply` automaticamente
-- `terraform destroy` disponível via `workflow_dispatch` manual com escolha de ambiente
-- Build Docker e push para ECR integrados ao pipeline antes do apply
+**Container leve**
+Imagem base `node:18-alpine` (~50MB). A instância não precisa de Node.js instalado — o Docker isola o runtime completamente.
+
+**Autoscaling baseado em CPU real**
+ASG escala com base em `CPUUtilization` medida pelo CloudWatch, não em schedule fixo. Cooldown de 120s entre ações evita oscillação.
 
 ---
 
-## Como usar
+## CI/CD
+
+O pipeline em `.github/workflows/terraform.yml` é disparado em:
+- `push` na branch `master` → `terraform apply` automático no ambiente dev
+- `workflow_dispatch` manual → escolha de ambiente (dev/prod) e ação (apply/destroy)
+
+**Credenciais AWS no pipeline**: atualmente via `AWS_ACCESS_KEY_ID` e `AWS_SECRET_ACCESS_KEY` como secrets no repositório. A evolução natural seria substituir por OIDC (sem credenciais de longa duração).
+
+**Sequência do pipeline:**
+1. Checkout
+2. Configurar credenciais AWS
+3. `terraform init` → `validate` → `plan`
+4. Docker build + push para ECR
+5. `terraform apply` (ou `destroy` se acionado manualmente)
+
+---
+
+## Como usar localmente
 
 ### Pré-requisitos
-- Terraform >= 1.14
+- Terraform >= 1.9
 - AWS CLI configurado (`aws configure`)
-- Docker instalado
-- Conta AWS com permissões de IAM, EC2, VPC, ELB, ECR, S3, DynamoDB
+- Bucket S3 e tabela DynamoDB para o backend já criados
 
-### Backend (executar uma vez)
-
-```bash
-cd terraform-backend
-terraform init
-terraform apply
-```
-
-### Deploy do ambiente dev
+### Deploy dev
 
 ```bash
 cd environments/dev
 
-# Criar terraform.tfvars com os valores do ambiente
-cp terraform.tfvars.example terraform.tfvars
-
-terraform init
-terraform plan
-terraform apply
-```
-
-### Valores de variáveis (dev)
-
-```hcl
+# Criar arquivo de variáveis
+cat > terraform.tfvars << EOF
 aws_region          = "us-east-1"
 vpc_cidr            = "10.0.0.0/16"
 subnet_cidr         = "10.0.1.0/24"
@@ -142,36 +127,37 @@ availability_zone   = "us-east-1a"
 subnet_cidr_2       = "10.0.2.0/24"
 availability_zone_2 = "us-east-1b"
 instance_type       = "t3.micro"
-ami_id              = "ami-0c02fb55956c7d316"
+ami_id              = "<ID da AMI Amazon Linux 2023>"
+EOF
+
+terraform init
+terraform plan
+terraform apply
 ```
 
-### Build e push da imagem Docker
+### Build e push manual da imagem
 
 ```bash
 # Autenticar no ECR
 aws ecr get-login-password --region us-east-1 | docker login \
   --username AWS \
-  --password-stdin <905542450009>.dkr.ecr.us-east-1.amazonaws.com
+  --password-stdin <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com
 
 # Build e push
-docker build -t <ecr-url>/dev-app:latest ./app
-docker push <ecr-url>/dev-app:latest
+docker build -t <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/dev-app:latest ./app
+docker push <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/dev-app:latest
 ```
 
 ### Destruir recursos
 
-Via pipeline (recomendado):
-- GitHub Actions → Terraform CI/CD → Run workflow → action: `destroy` → environment: `dev`
-
-Via CLI:
 ```bash
 cd environments/dev && terraform destroy
 ```
+
+Ou via pipeline: **Actions → Terraform CI/CD → Run workflow → action: destroy → environment: dev**
 
 ---
 
 ## Autor
 
-Desenvolvido por André Leão como projeto de portfólio DevOps.
-
-[LinkedIn](https://www.linkedin.com/in/andré-leão-andrade-424786175/)  ·  [GitHub](https://github.com/LeaoAndre3107)
+André Leão — [LinkedIn](https://www.linkedin.com/in/andreLeaoAndrade) · [GitHub](https://github.com/LeaoAndre3107)
